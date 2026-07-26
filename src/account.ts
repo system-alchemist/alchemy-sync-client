@@ -15,8 +15,8 @@ import {
 	wrapKey,
 	DEFAULT_ARGON2,
 	type Argon2Params
-} from './crypto';
-import { bytesToBase64, base64ToBytes } from './base64';
+} from './crypto.js';
+import { bytesToBase64, base64ToBytes } from './base64.js';
 
 type FetchFn = typeof globalThis.fetch;
 

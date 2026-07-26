@@ -11,7 +11,7 @@ import {
 	generateMEK,
 	isValidMnemonic,
 	type Argon2Params
-} from './crypto';
+} from './crypto.js';
 
 // Cheap Argon2 so tests stay fast; production uses the memory-hard default.
 const FAST: Argon2Params = { m: 8192, t: 1, p: 1 };

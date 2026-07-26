@@ -21,21 +21,21 @@
  * CryptoKey) go to the injected SessionStore, IndexedDB by default, so a
  * session survives closing the tab and ends at sign-out.
  */
-import { SyncEngine, type RemoteChange } from './engine';
-import { HttpSyncTransport } from './transport';
+import { SyncEngine, type RemoteChange } from './engine.js';
+import { HttpSyncTransport } from './transport.js';
 import {
 	registerAccount,
 	loginAccount,
 	recoverAccount,
 	changeAccountPassword,
 	regenerateRecoveryPhrase
-} from './account';
-import { importMasterKey, type Argon2Params } from './crypto';
-import { Signal, readStore } from './signal';
+} from './account.js';
+import { importMasterKey, type Argon2Params } from './crypto.js';
+import { Signal, readStore } from './signal.js';
 import {
 	indexedDbSessionStore,
 	type SessionStore
-} from './session-store';
+} from './session-store.js';
 
 /** How a store maps to/from per-entity sync items. */
 export interface SyncDescriptor<T> {

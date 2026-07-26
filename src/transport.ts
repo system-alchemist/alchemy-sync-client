@@ -4,8 +4,8 @@
  * JSON; a bearer token authenticates every call. `fetchFn` is injectable so the
  * engine↔transport↔server round-trip can be tested without a live server.
  */
-import type { SyncTransport, RemoteItem, OutgoingItem } from './engine';
-import { bytesToBase64, base64ToBytes } from './base64';
+import type { SyncTransport, RemoteItem, OutgoingItem } from './engine.js';
+import { bytesToBase64, base64ToBytes } from './base64.js';
 
 type FetchFn = typeof globalThis.fetch;
 

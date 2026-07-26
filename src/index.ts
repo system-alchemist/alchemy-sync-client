@@ -22,7 +22,7 @@ export {
 	changeAccountPassword,
 	regenerateRecoveryPhrase,
 	type AccountSession
-} from './account';
+} from './account.js';
 
 // The manager: owns the engine, bridges app stores, runs the sync loop.
 export {
@@ -31,7 +31,7 @@ export {
 	type SyncDescriptor,
 	type AuthState,
 	type SyncStatus
-} from './manager';
+} from './manager.js';
 
 // Session persistence (IndexedDB by default; swap for other hosts).
 export {
@@ -39,19 +39,19 @@ export {
 	memorySessionStore,
 	type SessionStore,
 	type PersistedSession
-} from './session-store';
+} from './session-store.js';
 
 // Reactive primitive the manager exposes state through.
-export { Signal, readStore, type Subscriber, type Unsubscriber } from './signal';
+export { Signal, readStore, type Subscriber, type Unsubscriber } from './signal.js';
 
 // Lower level, for anything driving the engine directly.
-export { SyncEngine, MemoryTransport, type SyncTransport, type RemoteChange } from './engine';
-export { HttpSyncTransport } from './transport';
-export { HLC, type HLCTimestamp } from './hlc';
-export { bytesToBase64, base64ToBytes } from './base64';
+export { SyncEngine, MemoryTransport, type SyncTransport, type RemoteChange } from './engine.js';
+export { HttpSyncTransport } from './transport.js';
+export { HLC, type HLCTimestamp } from './hlc.js';
+export { bytesToBase64, base64ToBytes } from './base64.js';
 export {
 	DEFAULT_ARGON2,
 	isValidMnemonic,
 	generateRecoveryMnemonic,
 	type Argon2Params
-} from './crypto';
+} from './crypto.js';

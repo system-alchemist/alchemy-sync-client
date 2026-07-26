@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HLC } from './hlc';
+import { HLC } from './hlc.js';
 
 describe('HLC', () => {
 	it('is monotonic within a frozen clock (counter advances)', () => {

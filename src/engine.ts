@@ -14,8 +14,8 @@ import {
 	encryptItem,
 	decryptItem,
 	type ItemKeys
-} from './crypto';
-import { HLC, type HLCTimestamp } from './hlc';
+} from './crypto.js';
+import { HLC, type HLCTimestamp } from './hlc.js';
 
 /** Server-visible record. `seq` is a per-account monotonic counter (the sync
  *  cursor); `blob` is the encrypted item. Nothing else is exposed. */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SyncEngine, MemoryTransport } from './engine';
-import { generateMEK } from './crypto';
+import { SyncEngine, MemoryTransport } from './engine.js';
+import { generateMEK } from './crypto.js';
 
 /** A device on `server`, driven by a clock the test controls. */
 function device(mek: Uint8Array, server: MemoryTransport, clock: () => number) {

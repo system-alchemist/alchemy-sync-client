@@ -87,6 +87,24 @@ sync.register(
 );
 ```
 
+## Electron: sync from main, or add CORS
+
+Decide this before writing the binding, because it changes which process owns
+the client.
+
+**From the main process (recommended).** Node's fetch does not enforce CORS, so
+it talks to the sync API with no server change, and the same code path works in
+a headless build. IndexedDB is not available there, so pass a `sessionStore` of
+your own — persist `{token, email, masterKey}` however the app already stores
+state. `masterKey` is a non-extractable `CryptoKey`; `structuredClone` keeps it
+intact, a JSON round-trip destroys it. The renderer then talks to main over IPC.
+
+**From the renderer.** Requests are cross-origin and the sync server currently
+sends no CORS headers at all — a preflight returns 405. That needs an allowlist
+adding to `/api/sync/*` on the Alcove side first; ask before building against
+it. Packaged Electron renderers send `Origin: null` or a custom scheme, which
+is awkward to allowlist safely, so this path costs more than it looks.
+
 ## Rules that keep the apps compatible
 
 1. **Namespace every key by source** — `scp:173`, `ao3:12345`. Ids are only

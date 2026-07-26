@@ -1,0 +1,35 @@
+{
+	"name": "@alchemylab/sync-client",
+	"version": "0.1.0",
+	"description": "Zero-knowledge E2E sync client shared by Alchemy Lab reader apps",
+	"license": "UNLICENSED",
+	"private": true,
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"check": "tsc -p tsconfig.json --noEmit",
+		"test": "vitest run",
+		"//prepare": "npm runs this automatically when the package is installed from a git URL, so consumers get dist/ without a published registry",
+		"prepare": "npm run build"
+	},
+	"dependencies": {
+		"@noble/hashes": "^2.2.0",
+		"@scure/bip39": "^2.2.0"
+	},
+	"devDependencies": {
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.10"
+	}
+}

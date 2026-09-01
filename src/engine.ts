@@ -36,6 +36,15 @@ export interface SyncTransport {
 	push(items: OutgoingItem[]): Promise<Array<{ id: string; seq: number }>>;
 }
 
+/**
+ * Max items per push request. The server caps request size, and a first sync of
+ * a large library sails past it as one request (SCP Ultimate's first push was
+ * ~3,350 items ≈ 1.5 MB → HTTP 400; ≤500 worked). 200 keeps each request small
+ * without chattiness, and per-batch acks mean an interrupted first sync resumes
+ * where it left off instead of starting over.
+ */
+const PUSH_BATCH = 200;
+
 /** What lives inside an encrypted blob — never leaves the device in the clear. */
 interface ItemPlaintext {
 	type: string;
@@ -186,10 +195,12 @@ export class SyncEngine {
 			} satisfies ItemPlaintext);
 			outgoing.push({ id, blob });
 		}
-		for (const ack of await this.transport.push(outgoing)) {
-			this.cursor = Math.max(this.cursor, ack.seq);
-			const r = this.records.get(localKeyById.get(ack.id) ?? '');
-			if (r) r.dirty = false;
+		for (let i = 0; i < outgoing.length; i += PUSH_BATCH) {
+			for (const ack of await this.transport.push(outgoing.slice(i, i + PUSH_BATCH))) {
+				this.cursor = Math.max(this.cursor, ack.seq);
+				const r = this.records.get(localKeyById.get(ack.id) ?? '');
+				if (r) r.dirty = false;
+			}
 		}
 	}
 }

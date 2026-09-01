@@ -103,7 +103,7 @@ describe('zero-knowledge', () => {
 
 		expect(server.rows.size).toBe(1);
 		for (const [id, row] of server.rows) {
-			const asText = Buffer.from(row.blob).toString('latin1');
+			const asText = new TextDecoder('latin1').decode(row.blob);
 			expect(asText).not.toContain('ZKMARKER'); // plaintext never present
 			expect(asText).not.toContain('bookmark'); // type not leaked
 			expect(id).toMatch(/^[0-9a-f]{32}$/); // id is an opaque HMAC...
@@ -120,5 +120,44 @@ describe('zero-knowledge', () => {
 
 		const attacker = await device(generateMEK(), server, () => 1); // wrong MEK
 		await expect(attacker.sync()).rejects.toThrow();
+	});
+});
+
+describe('SyncEngine — batched push', () => {
+	it('splits a large first sync into capped batches and marks everything clean', async () => {
+		const server = new MemoryTransport();
+		const pushSizes: number[] = [];
+		const origPush = server.push.bind(server);
+		server.push = (items) => {
+			pushSizes.push(items.length);
+			return origPush(items);
+		};
+
+		const e = await device(generateMEK(), server, () => 1);
+		const N = 450; // > 2 batches at the 200 cap
+		for (let i = 0; i < N; i++) e.set('progress', `scp:item-${i}`, { pct: i });
+		await e.sync();
+
+		expect(server.rows.size).toBe(N);
+		expect(pushSizes.length).toBeGreaterThan(1); // actually batched…
+		expect(Math.max(...pushSizes)).toBeLessThanOrEqual(200); // …under the cap
+		expect(pushSizes.reduce((a, b) => a + b, 0)).toBe(N); // nothing dropped
+
+		// Everything acked clean: a second sync has nothing to push.
+		pushSizes.length = 0;
+		await e.sync();
+		expect(pushSizes).toHaveLength(0);
+	});
+
+	it('a second device sees all items after a batched first sync', async () => {
+		const mek = generateMEK();
+		const server = new MemoryTransport();
+		const A = await device(mek, server, () => 1000);
+		for (let i = 0; i < 250; i++) A.set('progress', `scp:i-${i}`, { pct: i });
+		await A.sync();
+
+		const B = await device(mek, server, () => 2000);
+		await B.sync();
+		expect(B.list('progress')).toHaveLength(250);
 	});
 });

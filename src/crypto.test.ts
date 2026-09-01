@@ -40,7 +40,7 @@ describe('item encryption', () => {
 		const { itemKey } = await itemKeys();
 		const a = await encryptItem(itemKey, { x: 1 });
 		const b = await encryptItem(itemKey, { x: 1 });
-		expect(Buffer.from(a).equals(Buffer.from(b))).toBe(false);
+		expect(a).not.toEqual(b);
 	});
 });
 
@@ -82,7 +82,7 @@ describe('account key material', () => {
 	it('unlocks the same MEK with the right password', async () => {
 		const { mek, material } = await createAccountKeys('correct horse', FAST);
 		const unlocked = await unlockWithPassword('correct horse', material.salt, material.wrappedByPassword, FAST);
-		expect(Buffer.from(unlocked).equals(Buffer.from(mek))).toBe(true);
+		expect(unlocked).toEqual(mek);
 	});
 
 	it('rejects a wrong password', async () => {
@@ -97,6 +97,6 @@ describe('account key material', () => {
 		expect(isValidMnemonic(material.mnemonic)).toBe(true);
 		expect(material.mnemonic.split(' ')).toHaveLength(24);
 		const unlocked = await unlockWithRecovery(material.mnemonic, material.wrappedByRecovery);
-		expect(Buffer.from(unlocked).equals(Buffer.from(mek))).toBe(true);
+		expect(unlocked).toEqual(mek);
 	});
 });

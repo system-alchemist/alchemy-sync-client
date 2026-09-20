@@ -33,6 +33,10 @@ export interface PersistedSession {
 	email: string;
 	/** Non-extractable HKDF master key (see crypto.importMasterKey). */
 	masterKey: CryptoKey;
+	/** When the hub stops honouring `token` (ms since epoch), if it said. A
+	 *  custom SessionStore should carry this through save()/load() so a resumed
+	 *  session knows how urgently to refresh. */
+	expiresAt?: number;
 }
 
 function openDb(): Promise<IDBDatabase> {

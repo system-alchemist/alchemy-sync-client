@@ -105,6 +105,25 @@ adding to `/api/sync/*` on the Alcove side first; ask before building against
 it. Packaged Electron renderers send `Origin: null` or a custom scheme, which
 is awkward to allowlist safely, so this path costs more than it looks.
 
+## Session lifetime (v0.1.3+)
+
+Tokens expire; the manager keeps a session alive by rotating them. The hub
+contract (see SCP's `docs/hub-integration-spec.md` §7.2 for the full text):
+
+- every session response (`register`, `session`, `recover`) carries
+  `expiresAt` (ms since epoch); without it the manager refreshes blind, daily;
+- `POST /api/sync/session/refresh` with the bearer token → `{ token, expiresAt }`
+  (the old token keeps a 60 s grace); `401` means the hub ended the session;
+- `DELETE /api/sync/session` on sign-out (best effort).
+
+The manager refreshes when a third of the lifetime remains, and once more if a
+sync is refused with a 401 in between. A refused refresh signs the session out
+and sets `auth = { status: 'error', message: SESSION_EXPIRED_MESSAGE }` so the
+host can say "sign in again". A hub without the endpoint answers 404, which is
+ignored — adopt this version before the hub implements the contract, not
+after. Custom `SessionStore`s should carry `expiresAt` through `save()`/`load()`.
+`SyncManagerOptions.fetchFn` injects fetch (tests drive a fake hub with it).
+
 ## Rules that keep the apps compatible
 
 1. **Namespace every key by source** — `scp:173`, `ao3:12345`. Ids are only

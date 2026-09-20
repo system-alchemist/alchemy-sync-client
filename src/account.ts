@@ -17,12 +17,21 @@ import {
 	type Argon2Params
 } from './crypto.js';
 import { bytesToBase64, base64ToBytes } from './base64.js';
+import { SyncAuthError } from './transport.js';
 
 type FetchFn = typeof globalThis.fetch;
 
 export interface AccountSession {
 	token: string;
 	mek: Uint8Array;
+	/** When the hub will stop honouring `token` (ms since epoch). Hubs that
+	 *  don't report it leave this undefined; the manager then refreshes blind. */
+	expiresAt?: number;
+}
+
+/** `expiresAt` from a session response, if the hub sent a usable one. */
+function expiryOf(data: { expiresAt?: unknown }): number | undefined {
+	return typeof data.expiresAt === 'number' && Number.isFinite(data.expiresAt) ? data.expiresAt : undefined;
 }
 
 interface AccountOpts {
@@ -68,8 +77,8 @@ export async function registerAccount(
 		})
 	});
 	if (!res.ok) throw await readError(res);
-	const { token } = (await res.json()) as { token: string };
-	return { token, mek, mnemonic: material.mnemonic };
+	const data = (await res.json()) as { token: string; expiresAt?: number };
+	return { token: data.token, mek, mnemonic: material.mnemonic, expiresAt: expiryOf(data) };
 }
 
 /** Log in: the server returns salt + password-wrapped MEK; we derive the PDK
@@ -87,14 +96,19 @@ export async function loginAccount(
 		body: JSON.stringify({ email, password })
 	});
 	if (!res.ok) throw await readError(res);
-	const data = (await res.json()) as { token: string; salt: string; wrappedByPassword: string };
+	const data = (await res.json()) as {
+		token: string;
+		salt: string;
+		wrappedByPassword: string;
+		expiresAt?: number;
+	};
 	const mek = await unlockWithPassword(
 		password,
 		base64ToBytes(data.salt),
 		base64ToBytes(data.wrappedByPassword),
 		opts.params ?? DEFAULT_ARGON2
 	);
-	return { token: data.token, mek };
+	return { token: data.token, mek, expiresAt: expiryOf(data) };
 }
 
 /**
@@ -147,8 +161,8 @@ export async function recoverAccount(
 		})
 	});
 	if (!res.ok) throw await readError(res);
-	const { token } = (await res.json()) as { token: string };
-	return { token, mek };
+	const data = (await res.json()) as { token: string; expiresAt?: number };
+	return { token: data.token, mek, expiresAt: expiryOf(data) };
 }
 
 /**
@@ -171,7 +185,7 @@ export async function changeAccountPassword(
 	const params = opts.params ?? DEFAULT_ARGON2;
 
 	// Proves the current password and hands back the raw master key.
-	const { token, mek } = await loginAccount(apiBase, email, currentPassword, opts);
+	const { token, mek, expiresAt } = await loginAccount(apiBase, email, currentPassword, opts);
 
 	const rewrapped = await rewrapWithPassword(mek, newPassword, params);
 	const res = await fetchFn(`${apiBase}/api/sync/password`, {
@@ -186,7 +200,7 @@ export async function changeAccountPassword(
 	});
 	if (!res.ok) throw await readError(res);
 	// This session survives; the server drops the account's other sessions.
-	return { token, mek };
+	return { token, mek, expiresAt };
 }
 
 /**
@@ -206,7 +220,7 @@ export async function regenerateRecoveryPhrase(
 	const fetchFn = opts.fetchFn ?? globalThis.fetch;
 
 	// Proves the current password and hands back the raw master key.
-	const { token, mek } = await loginAccount(apiBase, email, currentPassword, opts);
+	const { token, mek, expiresAt } = await loginAccount(apiBase, email, currentPassword, opts);
 
 	const mnemonic = generateRecoveryMnemonic();
 	const wrappedByRecovery = await wrapKey(keyFromMnemonic(mnemonic), mek);
@@ -220,5 +234,50 @@ export async function regenerateRecoveryPhrase(
 		})
 	});
 	if (!res.ok) throw await readError(res);
-	return { token, mek, mnemonic };
+	return { token, mek, mnemonic, expiresAt };
+}
+
+/**
+ * Rotate a session token before (or just after) it expires. The hub keeps the
+ * presented token valid for a short grace so requests in flight complete.
+ * 401/403 mean the hub has ended the session (expiry, revocation, a password
+ * change elsewhere) and surface as SyncAuthError; any other failure — offline,
+ * hub down, or a hub without this endpoint yet (404) — is an ordinary Error the
+ * caller may ignore and retry later.
+ */
+export async function refreshSession(
+	apiBase: string,
+	token: string,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<{ token: string; expiresAt?: number }> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const res = await fetchFn(`${apiBase}/api/sync/session/refresh`, {
+		method: 'POST',
+		headers: { authorization: `Bearer ${token}` }
+	});
+	if (res.status === 401 || res.status === 403) {
+		throw new SyncAuthError(res.status, (await readError(res)).message);
+	}
+	if (!res.ok) throw await readError(res);
+	const data = (await res.json()) as { token: string; expiresAt?: number };
+	if (typeof data.token !== 'string' || !data.token) throw new Error('refresh returned no token');
+	return { token: data.token, expiresAt: expiryOf(data) };
+}
+
+/** Tell the hub this device is done with its token (sign-out). Best effort:
+ *  the local session is gone either way. */
+export async function endSession(
+	apiBase: string,
+	token: string,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<void> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	try {
+		await fetchFn(`${apiBase}/api/sync/session`, {
+			method: 'DELETE',
+			headers: { authorization: `Bearer ${token}` }
+		});
+	} catch {
+		/* offline: the hub's copy expires on its own */
+	}
 }

@@ -14,19 +14,23 @@
  * silently stop seeing the other's data.
  */
 
-// Account lifecycle: register, sign in, recover, change password, new phrase.
+// Account lifecycle: register, sign in, recover, change password, new phrase,
+// and the session's own lifetime (refresh, end).
 export {
 	registerAccount,
 	loginAccount,
 	recoverAccount,
 	changeAccountPassword,
 	regenerateRecoveryPhrase,
+	refreshSession,
+	endSession,
 	type AccountSession
 } from './account.js';
 
 // The manager: owns the engine, bridges app stores, runs the sync loop.
 export {
 	SyncManager,
+	SESSION_EXPIRED_MESSAGE,
 	type SyncManagerOptions,
 	type SyncDescriptor,
 	type AuthState,
@@ -46,7 +50,7 @@ export { Signal, readStore, type Subscriber, type Unsubscriber } from './signal.
 
 // Lower level, for anything driving the engine directly.
 export { SyncEngine, MemoryTransport, type SyncTransport, type RemoteChange } from './engine.js';
-export { HttpSyncTransport } from './transport.js';
+export { HttpSyncTransport, SyncAuthError } from './transport.js';
 export { HLC, type HLCTimestamp } from './hlc.js';
 export { bytesToBase64, base64ToBytes } from './base64.js';
 export {

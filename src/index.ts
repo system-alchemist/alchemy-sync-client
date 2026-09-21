@@ -22,6 +22,7 @@ export {
 	recoverAccount,
 	changeAccountPassword,
 	regenerateRecoveryPhrase,
+	regenerateRecoveryPhraseWithGoogle,
 	refreshSession,
 	endSession,
 	tokenStillValid,

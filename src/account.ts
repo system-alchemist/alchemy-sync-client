@@ -270,6 +270,35 @@ export async function regenerateRecoveryPhrase(
 }
 
 /**
+ * A new recovery phrase for an account that signs in with Google, which has no
+ * password to prove: a fresh ID token for the account's own Google identity is
+ * the proof, and the caller supplies the raw master key it holds (hosts that
+ * keep it at rest, or have it fresh from a sign-in). The old phrase stops
+ * working the moment this returns; show the new one once.
+ */
+export async function regenerateRecoveryPhraseWithGoogle(
+	apiBase: string,
+	token: string,
+	input: { idToken: string; mek: Uint8Array },
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<{ mnemonic: string }> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const mnemonic = generateRecoveryMnemonic();
+	const wrappedByRecovery = await wrapKey(keyFromMnemonic(mnemonic), input.mek);
+	const res = await fetchFn(`${apiBase}/api/sync/recovery-phrase`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+		body: JSON.stringify({
+			idToken: input.idToken,
+			wrappedByRecovery: bytesToBase64(wrappedByRecovery),
+			recoveryAuth: bytesToBase64(recoveryAuthFromMnemonic(mnemonic))
+		})
+	});
+	if (!res.ok) throw await readError(res);
+	return { mnemonic };
+}
+
+/**
  * Sign in to an existing account with Google. The hub verifies the ID token,
  * finds the account by Google's stable subject id, opens a session and returns
  * the Google-wrapped master key; the Drive secret unwraps it here. A hub that

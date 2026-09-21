@@ -9,6 +9,7 @@ import {
 	signInWithGoogle,
 	loginWithGoogle,
 	recoverAccount,
+	regenerateRecoveryPhraseWithGoogle,
 	NoGoogleAccountError,
 	DRIVE_KEY_MISMATCH_MESSAGE
 } from './account.js';
@@ -93,6 +94,14 @@ function fakeWorld() {
 			sessions.set(token, id.sub);
 			return json(200, { token, expiresAt: Date.now() + 30 * DAY, email: id.email });
 		}
+		if (url.pathname === '/api/sync/recovery-phrase' && method === 'POST') {
+			const sub = sessions.get(bearer);
+			if (!sub) return json(401, { message: 'invalid or expired session' });
+			const id = identity(body.idToken);
+			if (!id || id.sub !== sub) return json(401, { message: 'that Google account does not open this account' });
+			accounts.get(sub)!.wrappedByRecovery = body.wrappedByRecovery;
+			return json(200, { ok: true });
+		}
 		if (url.pathname === '/api/sync/recovery-material' && method === 'POST') {
 			const acct = [...accounts.values()].find((a) => a.email === body.email);
 			return json(200, { wrappedByRecovery: acct?.wrappedByRecovery ?? bytesToBase64(new Uint8Array(60)) });
@@ -171,6 +180,24 @@ describe('sign in with Google', () => {
 		// …and Google sign-in works again, with the same master key.
 		const again = await loginWithGoogle('', { idToken: ALIX, driveSecret: replaced.secret }, { fetchFn });
 		expect([...again.mek]).toEqual([...created.mek]);
+	});
+
+	it('a Google-only account can issue a new recovery phrase; only the new one recovers', async () => {
+		const world = fakeWorld();
+		const { fetchFn } = world;
+		const { secret } = await driveSecret('drive-token', { fetchFn });
+		const created = await signInWithGoogle('', { idToken: ALIX, driveSecret: secret }, { fetchFn });
+		const { mnemonic } = await regenerateRecoveryPhraseWithGoogle('', created.token, { idToken: ALIX, mek: created.mek }, { fetchFn });
+		expect(mnemonic.split(' ')).toHaveLength(24);
+		expect(mnemonic).not.toBe(created.mnemonic);
+		// The old phrase no longer matches; the new one restores the same master key.
+		await expect(recoverAccount('', 'alix@example.test', created.mnemonic!, 'a-new-password', { fetchFn, params: CHEAP })).rejects.toThrow(/does not match/);
+		const recovered = await recoverAccount('', 'alix@example.test', mnemonic, 'a-new-password', { fetchFn, params: CHEAP });
+		expect([...recovered.mek]).toEqual([...created.mek]);
+		// Someone else's Google identity cannot do it, even with a valid session.
+		await expect(
+			regenerateRecoveryPhraseWithGoogle('', created.token, { idToken: 'google:sub-999:x@example.test', mek: created.mek }, { fetchFn })
+		).rejects.toThrow(/does not open this account/);
 	});
 
 	it('an unknown identity is a NoGoogleAccountError from loginWithGoogle; a bad token is the hub message', async () => {

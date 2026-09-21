@@ -179,6 +179,9 @@ deleted, one with a password merely loses Google. `accountInfo(apiBase,
 token)` reports `{ email, googleLinked, hasPassword }` for the settings UI,
 and `deleteAccount(apiBase, token, email)` is the irreversible
 `DELETE /api/sync/account` (sessions, items and keys go with it).
+`regenerateRecoveryPhraseWithGoogle(apiBase, token, { idToken, mek })` (v0.3.1)
+issues a new phrase for an account with no password — a fresh ID token for
+its own Google identity is the proof — and retires the old one.
 
 ## Rules that keep the apps compatible
 

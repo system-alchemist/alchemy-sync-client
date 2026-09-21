@@ -25,8 +25,23 @@ export {
 	refreshSession,
 	endSession,
 	tokenStillValid,
-	type AccountSession
+	loginWithGoogle,
+	registerWithGoogle,
+	signInWithGoogle,
+	NoGoogleAccountError,
+	DRIVE_KEY_MISMATCH_MESSAGE,
+	type AccountSession,
+	type GoogleCredentials
 } from './account.js';
+
+// Sign in with Google: the key lives in the user's Drive app-data folder.
+export {
+	driveSecret,
+	DriveError,
+	DRIVE_KEY_FILE,
+	DRIVE_APPDATA_SCOPE,
+	type DriveSecret
+} from './google.js';
 
 // The manager: owns the engine, bridges app stores, runs the sync loop.
 export {

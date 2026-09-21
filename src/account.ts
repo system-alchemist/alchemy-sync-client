@@ -16,8 +16,10 @@ import {
 	DEFAULT_ARGON2,
 	type Argon2Params
 } from './crypto.js';
+import { generateMEK } from './crypto.js';
 import { bytesToBase64, base64ToBytes } from './base64.js';
 import { SyncAuthError } from './transport.js';
+import { wrapWithGoogle, unwrapWithGoogle } from './google.js';
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -40,6 +42,28 @@ interface AccountOpts {
 	 *  Defaults to the production profile; tests pass a cheaper one. */
 	params?: Argon2Params;
 }
+
+/** What "sign in with Google" hands the account flows: the ID token Google
+ *  issued for this app, and the secret from the user's Drive app-data folder
+ *  (see google.ts — `driveSecret()` reads or creates it). */
+export interface GoogleCredentials {
+	idToken: string;
+	driveSecret: Uint8Array;
+}
+
+/** The hub knows no account for this Google identity yet: register one. */
+export class NoGoogleAccountError extends Error {
+	constructor() {
+		super('no account for this Google identity yet');
+		this.name = 'NoGoogleAccountError';
+	}
+}
+
+/** The Drive key file does not unlock this account's wrapped key. The file was
+ *  replaced or the account was registered from another Drive; the recovery
+ *  phrase (with `recoverAccount`, passing the current Drive secret) repairs it. */
+export const DRIVE_KEY_MISMATCH_MESSAGE =
+	'The key in your Google Drive does not unlock this account. Recover it with your recovery phrase to repair the link.';
 
 async function readError(res: Response): Promise<Error> {
 	let message = `request failed (${res.status})`;
@@ -124,7 +148,12 @@ export async function recoverAccount(
 	email: string,
 	mnemonic: string,
 	newPassword: string,
-	opts: AccountOpts = {}
+	opts: AccountOpts & {
+		/** For an account that signs in with Google: re-wrap the key under this
+		 *  device's Drive secret as well, so the Google path works again after
+		 *  the Drive file was lost or replaced. */
+		driveSecret?: Uint8Array;
+	} = {}
 ): Promise<AccountSession> {
 	const fetchFn = opts.fetchFn ?? globalThis.fetch;
 	const phrase = mnemonic.trim().replace(/\s+/g, ' ');
@@ -157,7 +186,10 @@ export async function recoverAccount(
 			recoveryAuth: bytesToBase64(recoveryAuthFromMnemonic(phrase)),
 			newPassword,
 			salt: bytesToBase64(rewrapped.salt),
-			wrappedByPassword: bytesToBase64(rewrapped.wrappedByPassword)
+			wrappedByPassword: bytesToBase64(rewrapped.wrappedByPassword),
+			...(opts.driveSecret
+				? { wrappedByGoogle: bytesToBase64(await wrapWithGoogle(opts.driveSecret, mek)) }
+				: {})
 		})
 	});
 	if (!res.ok) throw await readError(res);
@@ -235,6 +267,89 @@ export async function regenerateRecoveryPhrase(
 	});
 	if (!res.ok) throw await readError(res);
 	return { token, mek, mnemonic, expiresAt };
+}
+
+/**
+ * Sign in to an existing account with Google. The hub verifies the ID token,
+ * finds the account by Google's stable subject id, opens a session and returns
+ * the Google-wrapped master key; the Drive secret unwraps it here. A hub that
+ * knows no account for this identity answers 404 → NoGoogleAccountError, which
+ * `signInWithGoogle` turns into a registration.
+ */
+export async function loginWithGoogle(
+	apiBase: string,
+	creds: GoogleCredentials,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<AccountSession & { email: string }> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const res = await fetchFn(`${apiBase}/api/sync/google/session`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ idToken: creds.idToken })
+	});
+	if (res.status === 404) throw new NoGoogleAccountError();
+	if (!res.ok) throw await readError(res);
+	const data = (await res.json()) as {
+		token: string;
+		email: string;
+		wrappedByGoogle: string;
+		expiresAt?: number;
+	};
+	let mek: Uint8Array;
+	try {
+		mek = await unwrapWithGoogle(creds.driveSecret, base64ToBytes(data.wrappedByGoogle));
+	} catch {
+		throw new Error(DRIVE_KEY_MISMATCH_MESSAGE);
+	}
+	return { token: data.token, mek, email: data.email, expiresAt: expiryOf(data) };
+}
+
+/**
+ * Create an account for a Google identity. Key material is generated here as
+ * for a password account — a fresh master key, wrapped under the Drive secret
+ * and under a new recovery phrase — and only the wrapped forms travel. The
+ * email comes from the verified ID token, not from the caller. Surface the
+ * mnemonic exactly once.
+ */
+export async function registerWithGoogle(
+	apiBase: string,
+	creds: GoogleCredentials,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<AccountSession & { email: string; mnemonic: string }> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const mek = generateMEK();
+	const mnemonic = generateRecoveryMnemonic();
+	const res = await fetchFn(`${apiBase}/api/sync/google/register`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({
+			idToken: creds.idToken,
+			wrappedByGoogle: bytesToBase64(await wrapWithGoogle(creds.driveSecret, mek)),
+			wrappedByRecovery: bytesToBase64(await wrapKey(keyFromMnemonic(mnemonic), mek)),
+			recoveryAuth: bytesToBase64(recoveryAuthFromMnemonic(mnemonic))
+		})
+	});
+	if (!res.ok) throw await readError(res);
+	const data = (await res.json()) as { token: string; email: string; expiresAt?: number };
+	return { token: data.token, mek, email: data.email, mnemonic, expiresAt: expiryOf(data) };
+}
+
+/**
+ * The one call an app makes for its "Sign in with Google" button: sign in when
+ * the account exists, create it when it does not. `mnemonic` is present only
+ * when an account was just created — show it once, the way sign-up does.
+ */
+export async function signInWithGoogle(
+	apiBase: string,
+	creds: GoogleCredentials,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<AccountSession & { email: string; mnemonic?: string }> {
+	try {
+		return await loginWithGoogle(apiBase, creds, opts);
+	} catch (e) {
+		if (e instanceof NoGoogleAccountError) return registerWithGoogle(apiBase, creds, opts);
+		throw e;
+	}
 }
 
 /**

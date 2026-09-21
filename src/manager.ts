@@ -40,7 +40,9 @@ import {
 	regenerateRecoveryPhrase,
 	refreshSession,
 	endSession,
-	tokenStillValid
+	tokenStillValid,
+	signInWithGoogle,
+	type GoogleCredentials
 } from './account.js';
 import { importMasterKey, type Argon2Params } from './crypto.js';
 import { Signal, readStore } from './signal.js';
@@ -296,6 +298,25 @@ export class SyncManager {
 				fetchFn: this.fetchFn
 			});
 			await this.start(token, mek, email, expiresAt ?? null);
+		} catch (e) {
+			this.auth.set({ status: 'error', message: errorMessage(e) });
+			throw e;
+		}
+	}
+
+	/**
+	 * Sign in with Google: the ID token proves the identity, the Drive secret
+	 * unwraps the key (google.ts). Creates the account on first use; then the
+	 * returned `mnemonic` is the recovery phrase to show exactly once.
+	 */
+	async signInWithGoogle(creds: GoogleCredentials): Promise<{ mnemonic?: string }> {
+		this.auth.set({ status: 'signing-in' });
+		try {
+			const { token, mek, email, expiresAt, mnemonic } = await signInWithGoogle(this.apiBase, creds, {
+				fetchFn: this.fetchFn
+			});
+			await this.start(token, mek, email, expiresAt ?? null);
+			return { mnemonic };
 		} catch (e) {
 			this.auth.set({ status: 'error', message: errorMessage(e) });
 			throw e;

@@ -132,6 +132,39 @@ carry `expiresAt` through `save()`/`load()`. `SyncManagerOptions.fetchFn`
 injects fetch (tests drive a fake hub with it); `tokenStillValid()` is exported
 for hosts that want the same probe.
 
+## Sign in with Google (v0.2.0+)
+
+Google proves *who* the user is; it hands over no secret, so it cannot replace
+the password in the key model by itself. The client keeps the account
+zero-knowledge to the hub by putting the secret in the user's own Google Drive
+**app-data folder** (a hidden per-app space, scope
+`https://www.googleapis.com/auth/drive.appdata`): `driveSecret(accessToken)`
+reads the app's key file there or creates it (32 random bytes), and the master
+key is wrapped under HKDF(secret) and stored on the hub as `wrappedByGoogle`,
+next to the password and recovery wrappings. The hub still holds only
+ciphertext; Google holds a secret but never the ciphertext. Either alone
+cannot read the library — the app's privacy copy must say so.
+
+The app gets an ID token plus a Drive-scoped access token however its platform
+does (native sign-in on the phone, the auth-code flow on the web), then:
+
+```ts
+const { secret, created } = await driveSecret(accessToken);
+const s = await manager.signInWithGoogle({ idToken, driveSecret: secret });
+if (s.mnemonic) showOnce(s.mnemonic); // an account was just created
+```
+
+`signInWithGoogle` signs in when the hub knows the identity and registers
+otherwise (`loginWithGoogle` / `registerWithGoogle` are the halves). A Drive
+file that no longer unlocks the account fails with `DRIVE_KEY_MISMATCH_MESSAGE`;
+`recoverAccount(..., { driveSecret })` re-wraps the key under the current file
+while setting a password. Hub contract: `POST /api/sync/google/session`
+`{ idToken }` → `{ token, expiresAt, email, wrappedByGoogle }` (404 when the
+identity has no account); `POST /api/sync/google/register` `{ idToken,
+wrappedByGoogle, wrappedByRecovery, recoveryAuth }` → `{ token, expiresAt,
+email }` (409 when the identity or the email is already registered); the hub
+verifies the ID token against its configured OAuth client ids.
+
 ## Rules that keep the apps compatible
 
 1. **Namespace every key by source** — `scp:173`, `ao3:12345`. Ids are only

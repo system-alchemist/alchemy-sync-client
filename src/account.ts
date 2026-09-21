@@ -240,10 +240,16 @@ export async function regenerateRecoveryPhrase(
 /**
  * Rotate a session token before (or just after) it expires. The hub keeps the
  * presented token valid for a short grace so requests in flight complete.
- * 401/403 mean the hub has ended the session (expiry, revocation, a password
- * change elsewhere) and surface as SyncAuthError; any other failure — offline,
- * hub down, or a hub without this endpoint yet (404) — is an ordinary Error the
- * caller may ignore and retry later.
+ * 401/403 surface as SyncAuthError — a *candidate* for "the hub ended the
+ * session"; the manager confirms it against the items endpoint before acting,
+ * because a 403 can also be an edge or a framework guard (SvelteKit's CSRF
+ * check answered a bodiless POST from a WebView with exactly that). Any other
+ * failure — offline, hub down, or a hub without this endpoint yet (404) — is
+ * an ordinary Error the caller may ignore and retry later.
+ *
+ * Always a JSON body: a mutating request without a content type looks like a
+ * cross-site form post to the hub's CSRF protection and is refused before it
+ * reaches any route.
  */
 export async function refreshSession(
 	apiBase: string,
@@ -253,7 +259,8 @@ export async function refreshSession(
 	const fetchFn = opts.fetchFn ?? globalThis.fetch;
 	const res = await fetchFn(`${apiBase}/api/sync/session/refresh`, {
 		method: 'POST',
-		headers: { authorization: `Bearer ${token}` }
+		headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+		body: '{}'
 	});
 	if (res.status === 401 || res.status === 403) {
 		throw new SyncAuthError(res.status, (await readError(res)).message);
@@ -262,6 +269,28 @@ export async function refreshSession(
 	const data = (await res.json()) as { token: string; expiresAt?: number };
 	if (typeof data.token !== 'string' || !data.token) throw new Error('refresh returned no token');
 	return { token: data.token, expiresAt: expiryOf(data) };
+}
+
+/**
+ * Is `token` still honoured? A plain read of the items endpoint, past every
+ * sequence number, so nothing is transferred. Only the hub's own 401 says no;
+ * anything else (offline, an edge's 403, a 5xx) leaves the question open.
+ */
+export async function tokenStillValid(
+	apiBase: string,
+	token: string,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<'valid' | 'invalid' | 'unknown'> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	try {
+		const res = await fetchFn(`${apiBase}/api/sync/items?since=2147483647`, {
+			headers: { authorization: `Bearer ${token}` }
+		});
+		if (res.status === 401) return 'invalid';
+		return res.ok ? 'valid' : 'unknown';
+	} catch {
+		return 'unknown';
+	}
 }
 
 /** Tell the hub this device is done with its token (sign-out). Best effort:
@@ -275,7 +304,8 @@ export async function endSession(
 	try {
 		await fetchFn(`${apiBase}/api/sync/session`, {
 			method: 'DELETE',
-			headers: { authorization: `Bearer ${token}` }
+			headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+			body: '{}'
 		});
 	} catch {
 		/* offline: the hub's copy expires on its own */

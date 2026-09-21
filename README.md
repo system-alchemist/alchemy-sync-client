@@ -117,12 +117,20 @@ contract (see SCP's `docs/hub-integration-spec.md` §7.2 for the full text):
 - `DELETE /api/sync/session` on sign-out (best effort).
 
 The manager refreshes when a third of the lifetime remains, and once more if a
-sync is refused with a 401 in between. A refused refresh signs the session out
-and sets `auth = { status: 'error', message: SESSION_EXPIRED_MESSAGE }` so the
-host can say "sign in again". A hub without the endpoint answers 404, which is
-ignored — adopt this version before the hub implements the contract, not
-after. Custom `SessionStore`s should carry `expiresAt` through `save()`/`load()`.
-`SyncManagerOptions.fetchFn` injects fetch (tests drive a fake hub with it).
+sync is refused with a 401 in between. A refused refresh (401/403) is treated
+as a claim, not a verdict (v0.1.4+): the manager confirms it with a plain
+`GET /api/sync/items` using the same token, and only the hub's own 401 there
+ends the session — a 403 from an edge or a framework guard (SvelteKit's CSRF
+check refuses any mutating request without a JSON content type) must never
+sign a working device out. An ended session sets
+`auth = { status: 'error', message: SESSION_EXPIRED_MESSAGE }` so the host can
+say "sign in again". A hub without the endpoint answers 404, which is ignored
+— adopt this version before the hub implements the contract, not after.
+Every mutating call the client makes carries `content-type: application/json`
+and a JSON body, refresh and sign-out included. Custom `SessionStore`s should
+carry `expiresAt` through `save()`/`load()`. `SyncManagerOptions.fetchFn`
+injects fetch (tests drive a fake hub with it); `tokenStillValid()` is exported
+for hosts that want the same probe.
 
 ## Rules that keep the apps compatible
 

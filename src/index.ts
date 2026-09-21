@@ -24,6 +24,7 @@ export {
 	regenerateRecoveryPhrase,
 	refreshSession,
 	endSession,
+	tokenStillValid,
 	type AccountSession
 } from './account.js';
 

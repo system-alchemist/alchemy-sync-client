@@ -12,7 +12,7 @@ import { generateMEK, importMasterKey } from './crypto.js';
 function fakeHub(opts: {
 	valid: Set<string>;
 	refreshable?: Set<string>;
-	refresh?: (token: string) => { token: string; expiresAt?: number } | 'expired' | 'missing';
+	refresh?: (token: string) => { token: string; expiresAt?: number } | 'expired' | 'missing' | 'forbidden';
 }) {
 	const refreshable = opts.refreshable ?? opts.valid;
 	const calls: string[] = [];
@@ -21,11 +21,16 @@ function fakeHub(opts: {
 	const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input).replace(/^https?:\/\/[^/]+/, '');
 		const method = init?.method ?? 'GET';
-		const token = (new Headers(init?.headers).get('authorization') ?? '').replace('Bearer ', '');
+		const headers = new Headers(init?.headers);
+		const token = (headers.get('authorization') ?? '').replace('Bearer ', '');
 		calls.push(`${method} ${url} ${token}`);
 		if (url === '/api/sync/session/refresh') {
+			// The hub's CSRF guard: a mutating request without a JSON body is a "form post".
+			if (headers.get('content-type') !== 'application/json')
+				return new Response('Cross-site POST form submissions are forbidden', { status: 403 });
 			const r = opts.refresh?.(token) ?? 'missing';
 			if (r === 'missing') return json(404, { message: 'no such route' });
+			if (r === 'forbidden') return new Response('forbidden', { status: 403 });
 			if (r === 'expired' || !refreshable.has(token)) return json(401, { message: 'session expired' });
 			opts.valid.delete(token);
 			opts.valid.add(r.token);
@@ -116,6 +121,26 @@ describe('SyncManager — session lifetime', () => {
 			'POST /api/sync/session/refresh t1',
 			'GET /api/sync/items?since=0 t2'
 		]);
+		m.signOut();
+	});
+
+	it('does not end a working session over a 403 from the refresh route (an edge, a CSRF guard)', async () => {
+		const hub = fakeHub({ valid: new Set(['t1']), refresh: () => 'forbidden' });
+		const { m, store } = await resumed(hub, { token: 't1' }); // unknown expiry: refresh attempted at once
+		expect(hub.calls).toContain('POST /api/sync/session/refresh t1');
+		expect(m.auth.get().status).toBe('signed-in');
+		expect(m.status.get()).toBe('idle');
+		expect((await store.load())?.token).toBe('t1');
+		m.signOut();
+	});
+
+	it('does not end a session over a stray 401 from refresh while the token still works', async () => {
+		const hub = fakeHub({ valid: new Set(['t1']), refreshable: new Set(), refresh: () => 'expired' });
+		const { m, store } = await resumed(hub, { token: 't1' });
+		expect(m.auth.get().status).toBe('signed-in');
+		expect((await store.load())?.token).toBe('t1');
+		// The refusal was checked against the items endpoint before being believed.
+		expect(hub.calls.filter((c) => c.startsWith('GET /api/sync/items?since=2147483647 t1'))).toHaveLength(1);
 		m.signOut();
 	});
 

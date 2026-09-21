@@ -39,7 +39,8 @@ import {
 	changeAccountPassword,
 	regenerateRecoveryPhrase,
 	refreshSession,
-	endSession
+	endSession,
+	tokenStillValid
 } from './account.js';
 import { importMasterKey, type Argon2Params } from './crypto.js';
 import { Signal, readStore } from './signal.js';
@@ -489,11 +490,16 @@ export class SyncManager {
 				await this.persist();
 				return true;
 			} catch (e) {
-				if (e instanceof SyncAuthError) {
-					this.expire();
-					return false;
+				// A refused refresh is only a claim. Confirm it against the items
+				// endpoint: a 403 there may be an edge or a CSRF guard, not the hub,
+				// and even a stray 401 must not sign a working device out.
+				if (e instanceof SyncAuthError && this.token === token) {
+					if ((await tokenStillValid(this.apiBase, token, { fetchFn: this.fetchFn })) === 'invalid') {
+						this.expire();
+						return false;
+					}
 				}
-				return true; // offline, hub down, or no refresh endpoint yet: carry on with the token we have
+				return true; // offline, hub down, no refresh endpoint yet, or unconfirmed: carry on with the token we have
 			} finally {
 				this.refreshing = null;
 			}

@@ -165,6 +165,21 @@ wrappedByGoogle, wrappedByRecovery, recoveryAuth }` → `{ token, expiresAt,
 email }` (409 when the identity or the email is already registered); the hub
 verifies the ID token against its configured OAuth client ids.
 
+**Linking (v0.3.0+).** An existing password account can take on a Google
+identity so that Sign in with Google lands in the same library everywhere:
+`linkGoogle(apiBase, token, { idToken, driveSecret, mek })` re-wraps the
+master key under the Drive secret and posts only the wrapping to
+`POST /api/sync/google/link`. It needs the *raw* master key, so it is for
+hosts that hold the key at rest (SCP's server and phone do) or have it fresh
+from a sign-in — the manager's non-extractable key cannot do it. If the
+identity already opens a different account the hub answers 409 with the
+details and the client throws `GoogleOnOtherAccountError`; ask, then call
+again with `confirmMove: true`: a Google-only account left with no way in is
+deleted, one with a password merely loses Google. `accountInfo(apiBase,
+token)` reports `{ email, googleLinked, hasPassword }` for the settings UI,
+and `deleteAccount(apiBase, token, email)` is the irreversible
+`DELETE /api/sync/account` (sessions, items and keys go with it).
+
 ## Rules that keep the apps compatible
 
 1. **Namespace every key by source** — `scp:173`, `ao3:12345`. Ids are only

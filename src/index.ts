@@ -30,8 +30,14 @@ export {
 	signInWithGoogle,
 	NoGoogleAccountError,
 	DRIVE_KEY_MISMATCH_MESSAGE,
+	accountInfo,
+	linkGoogle,
+	deleteAccount,
+	GoogleOnOtherAccountError,
 	type AccountSession,
-	type GoogleCredentials
+	type AccountInfo,
+	type GoogleCredentials,
+	type LinkGoogleInput
 } from './account.js';
 
 // Sign in with Google: the key lives in the user's Drive app-data folder.

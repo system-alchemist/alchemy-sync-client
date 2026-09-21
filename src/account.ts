@@ -352,6 +352,106 @@ export async function signInWithGoogle(
 	}
 }
 
+/** What the hub knows about the signed-in account, for the settings UI. */
+export interface AccountInfo {
+	email: string;
+	/** A Google identity opens this account (Sign in with Google lands here). */
+	googleLinked: boolean;
+	/** The account has a password (false for one created by Google sign-in). */
+	hasPassword: boolean;
+}
+
+/** GET /api/sync/account with the session token. */
+export async function accountInfo(
+	apiBase: string,
+	token: string,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<AccountInfo> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const res = await fetchFn(`${apiBase}/api/sync/account`, {
+		headers: { authorization: `Bearer ${token}` }
+	});
+	if (!res.ok) throw await readError(res);
+	const data = (await res.json()) as { email: string; googleLinked?: boolean; hasPassword?: boolean };
+	return { email: data.email, googleLinked: data.googleLinked === true, hasPassword: data.hasPassword !== false };
+}
+
+/** The Google identity presented for linking already opens a different
+ *  account. `other` says which, so the app can ask before moving it. */
+export class GoogleOnOtherAccountError extends Error {
+	constructor(readonly other: { email: string; items: number; googleOnly: boolean }) {
+		super(`that Google account already opens a different library (${other.email})`);
+		this.name = 'GoogleOnOtherAccountError';
+	}
+}
+
+export interface LinkGoogleInput {
+	idToken: string;
+	driveSecret: Uint8Array;
+	/** The account's raw master key — only a host that holds it at rest (or has
+	 *  it fresh from a sign-in) can link, since the key must be re-wrapped
+	 *  under the Drive secret. The manager's non-extractable key cannot. */
+	mek: Uint8Array;
+	/** The identity is on another account: yes, move it here. A Google-only
+	 *  account left with no way in is deleted by the hub; one with a password
+	 *  merely loses Google. */
+	confirmMove?: boolean;
+}
+
+/**
+ * Attach a Google identity to the signed-in account, so Sign in with Google
+ * lands here on every device. Re-wraps the master key under the Drive secret
+ * (the same wrapping a Google sign-up makes) and sends only that. Linking the
+ * same identity again just refreshes the wrapping.
+ */
+export async function linkGoogle(
+	apiBase: string,
+	token: string,
+	input: LinkGoogleInput,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<{ linked: true; already: boolean; moved: { email: string; deleted: boolean } | null }> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const res = await fetchFn(`${apiBase}/api/sync/google/link`, {
+		method: 'POST',
+		headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+		body: JSON.stringify({
+			idToken: input.idToken,
+			wrappedByGoogle: bytesToBase64(await wrapWithGoogle(input.driveSecret, input.mek)),
+			...(input.confirmMove ? { confirmMove: true } : {})
+		})
+	});
+	if (res.status === 409) {
+		const body = (await res.json().catch(() => null)) as
+			| { code?: string; message?: string; other?: { email: string; items: number; googleOnly: boolean } }
+			| null;
+		if (body?.code === 'google-on-other-account' && body.other) throw new GoogleOnOtherAccountError(body.other);
+		throw new Error(body?.message ?? 'request failed (409)');
+	}
+	if (!res.ok) throw await readError(res);
+	const data = (await res.json()) as { already?: boolean; moved?: { email: string; deleted: boolean } | null };
+	return { linked: true, already: data.already === true, moved: data.moved ?? null };
+}
+
+/**
+ * Delete the signed-in account and everything the hub holds for it: sessions,
+ * every encrypted item, the wrapped keys. The email is required as a
+ * deliberate second step; the hub refuses a mismatch. Irreversible.
+ */
+export async function deleteAccount(
+	apiBase: string,
+	token: string,
+	email: string,
+	opts: Pick<AccountOpts, 'fetchFn'> = {}
+): Promise<void> {
+	const fetchFn = opts.fetchFn ?? globalThis.fetch;
+	const res = await fetchFn(`${apiBase}/api/sync/account`, {
+		method: 'DELETE',
+		headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+		body: JSON.stringify({ email })
+	});
+	if (!res.ok && res.status !== 204) throw await readError(res);
+}
+
 /**
  * Rotate a session token before (or just after) it expires. The hub keeps the
  * presented token valid for a short grace so requests in flight complete.

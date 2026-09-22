@@ -147,6 +147,17 @@ export class SyncManager {
 	/** True while applying a remote change, so the store update it causes isn't
 	 *  echoed straight back to the server. */
 	private applying = false;
+	/**
+	 * True between the engine's onPullStart and onPullEnd. While a pull is in
+	 * flight applyRemote skips its per-change snapshot rebuild and onLocalChange
+	 * skips its diff; endPull settles each touched store once. Without this a
+	 * first sync of N items rebuilt the whole JSON snapshot ~3N times (O(N²)),
+	 * which on a phone with a 4,000-item library meant minutes of "syncing".
+	 */
+	private pulling = false;
+	/** Per store touched during the pull: key → the JSON the server sent
+	 *  (undefined for a delete), for the merge-kept-something-else check. */
+	private readonly touched = new Map<Registration, Map<string, string | undefined>>();
 	private syncing = false;
 	private debounce: ReturnType<typeof setTimeout> | null = null;
 	private interval: ReturnType<typeof setInterval> | null = null;
@@ -197,14 +208,19 @@ export class SyncManager {
 	 */
 	private reconcile(reg: Registration): void {
 		if (!this.engine) return;
-		// 1. Engine → store, for everything already pulled.
+		// 1. Engine → store, for everything already pulled. Batched like a pull so
+		//    the store's notifications don't rebuild the snapshot once per entity;
+		//    the snapshot is taken once below.
+		const wasPulling = this.pulling;
 		this.applying = true;
+		this.pulling = true;
 		try {
 			for (const { key, data } of this.engine.list(reg.type)) {
 				reg.update((v) => reg.descriptor.applyItem(v, { key, data, deleted: false }));
 			}
 		} finally {
 			this.applying = false;
+			this.pulling = wasPulling;
 		}
 		// 2. Store → engine, but only for entities the engine has never seen, so a
 		//    fresh local write can't clobber a remote record's HLC (or resurrect
@@ -221,6 +237,7 @@ export class SyncManager {
 	}
 
 	private onLocalChange(reg: Registration): void {
+		if (this.applying && this.pulling) return; // settled once, in endPull / reconcile
 		const next = itemsToMap(reg.descriptor.toItems(reg.read()));
 		if (this.applying || !this.engine) {
 			reg.snapshot = next; // remote-applied or signed out — don't push
@@ -243,6 +260,30 @@ export class SyncManager {
 		if (changed) this.scheduleSync();
 	}
 
+	private startPull(): void {
+		this.pulling = true;
+	}
+
+	/** One snapshot per touched store instead of one per change, then the same
+	 *  merge-kept-something-else push-back that applyRemote does unbatched. */
+	private endPull(): void {
+		this.pulling = false;
+		let push = false;
+		for (const [reg, keys] of this.touched) {
+			const items = itemsToMap(reg.descriptor.toItems(reg.read()));
+			for (const [key, theirs] of keys) {
+				const ours = items.get(key);
+				if (ours !== undefined && ours !== theirs) {
+					this.engine?.set(reg.type, key, JSON.parse(ours));
+					push = true;
+				}
+			}
+			reg.snapshot = items;
+		}
+		this.touched.clear();
+		if (push) this.scheduleSync();
+	}
+
 	private applyRemote(change: RemoteChange): void {
 		const reg = this.regs.find((r) => r.type === change.type);
 		if (!reg) return;
@@ -263,9 +304,15 @@ export class SyncManager {
 		// other than what the server sent, push ours back so the other device
 		// converges on it — otherwise our copy would be silently overwritten by the
 		// engine's plain last-writer-wins on the next round.
+		const theirs = change.deleted ? undefined : JSON.stringify(change.data);
+		if (this.pulling) {
+			let keys = this.touched.get(reg);
+			if (!keys) this.touched.set(reg, (keys = new Map()));
+			keys.set(change.key, theirs);
+			return;
+		}
 		const items = itemsToMap(reg.descriptor.toItems(reg.read()));
 		const ours = items.get(change.key);
-		const theirs = change.deleted ? undefined : JSON.stringify(change.data);
 		if (ours !== undefined && ours !== theirs) {
 			this.engine?.set(reg.type, change.key, JSON.parse(ours));
 			this.scheduleSync();
@@ -457,7 +504,9 @@ export class SyncManager {
 			new HttpSyncTransport(this.apiBase, () => this.token ?? '', this.fetchFn),
 			{
 				node: this.deviceId,
-				onRemoteChange: (c) => this.applyRemote(c)
+				onRemoteChange: (c) => this.applyRemote(c),
+				onPullStart: () => this.startPull(),
+				onPullEnd: () => this.endPull()
 			}
 		);
 		// Seed the engine with every current local entity so the first sync pushes

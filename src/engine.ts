@@ -70,6 +70,14 @@ export interface SyncEngineOptions {
 	/** Stable per-device id; breaks same-millisecond ties between devices. */
 	node?: string;
 	onRemoteChange?: (change: RemoteChange) => void;
+	/**
+	 * Bracket the pull phase of a sync. A host that applies each remote change
+	 * into a store can defer its per-change bookkeeping (snapshots, diffs) to
+	 * onPullEnd, which turns a first sync of N items from O(N²) into O(N).
+	 * onPullEnd runs even when the pull throws part-way.
+	 */
+	onPullStart?: () => void;
+	onPullEnd?: () => void;
 }
 
 export class SyncEngine {
@@ -84,6 +92,8 @@ export class SyncEngine {
 	private readonly records = new Map<string, LocalRecord>();
 	private cursor = 0;
 	private onRemoteChange?: (change: RemoteChange) => void;
+	private onPullStart?: () => void;
+	private onPullEnd?: () => void;
 
 	private constructor(
 		private readonly keys: ItemKeys,
@@ -92,6 +102,8 @@ export class SyncEngine {
 	) {
 		this.hlc = new HLC(opts.now, opts.node);
 		this.onRemoteChange = opts.onRemoteChange;
+		this.onPullStart = opts.onPullStart;
+		this.onPullEnd = opts.onPullEnd;
 	}
 
 	/**
@@ -160,21 +172,27 @@ export class SyncEngine {
 	/** One reconcile cycle: pull remote changes, merge (LWW), push local changes. */
 	async sync(): Promise<void> {
 		// PULL + merge. Identity comes from the decrypted plaintext, not remote.id.
-		for (const remote of await this.transport.pull(this.cursor)) {
-			this.cursor = Math.max(this.cursor, remote.seq);
-			const item = await decryptItem<ItemPlaintext>(this.keys.itemKey, remote.blob);
-			this.hlc.receive(item.hlc);
-			const lk = SyncEngine.localKey(item.type, item.key);
-			const local = this.records.get(lk);
-			if (!local || HLC.compare(item.hlc, local.hlc) > 0) {
-				this.records.set(lk, { ...item, dirty: false });
-				this.onRemoteChange?.({
-					type: item.type,
-					key: item.key,
-					data: item.deleted ? undefined : item.data,
-					deleted: item.deleted
-				});
+		const remotes = await this.transport.pull(this.cursor);
+		this.onPullStart?.();
+		try {
+			for (const remote of remotes) {
+				this.cursor = Math.max(this.cursor, remote.seq);
+				const item = await decryptItem<ItemPlaintext>(this.keys.itemKey, remote.blob);
+				this.hlc.receive(item.hlc);
+				const lk = SyncEngine.localKey(item.type, item.key);
+				const local = this.records.get(lk);
+				if (!local || HLC.compare(item.hlc, local.hlc) > 0) {
+					this.records.set(lk, { ...item, dirty: false });
+					this.onRemoteChange?.({
+						type: item.type,
+						key: item.key,
+						data: item.deleted ? undefined : item.data,
+						deleted: item.deleted
+					});
+				}
 			}
+		} finally {
+			this.onPullEnd?.();
 		}
 
 		// PUSH dirty. The opaque server id is derived here (async HMAC) so the

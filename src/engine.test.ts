@@ -134,13 +134,13 @@ describe('SyncEngine — batched push', () => {
 		};
 
 		const e = await device(generateMEK(), server, () => 1);
-		const N = 450; // > 2 batches at the 200 cap
+		const N = 1100; // 3 batches at the 500 cap
 		for (let i = 0; i < N; i++) e.set('progress', `scp:item-${i}`, { pct: i });
 		await e.sync();
 
 		expect(server.rows.size).toBe(N);
 		expect(pushSizes.length).toBeGreaterThan(1); // actually batched…
-		expect(Math.max(...pushSizes)).toBeLessThanOrEqual(200); // …under the cap
+		expect(Math.max(...pushSizes)).toBeLessThanOrEqual(500); // …under the cap
 		expect(pushSizes.reduce((a, b) => a + b, 0)).toBe(N); // nothing dropped
 
 		// Everything acked clean: a second sync has nothing to push.

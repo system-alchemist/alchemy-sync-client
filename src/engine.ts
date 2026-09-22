@@ -43,7 +43,7 @@ export interface SyncTransport {
  * without chattiness, and per-batch acks mean an interrupted first sync resumes
  * where it left off instead of starting over.
  */
-const PUSH_BATCH = 200;
+const PUSH_BATCH = 500; // the hub accepts up to 500 per push (limits.ts); a fresh device's first sync of a big library is ~7 batches, not 18
 
 /** What lives inside an encrypted blob — never leaves the device in the clear. */
 interface ItemPlaintext {

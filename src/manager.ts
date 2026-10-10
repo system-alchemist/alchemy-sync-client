@@ -119,6 +119,14 @@ function itemsToMap(items: Array<{ key: string; data: unknown }>): Map<string, s
 	return map;
 }
 
+/** What an ended session's engine meets when it tries to send anything. */
+class SessionEndedError extends Error {
+	constructor() {
+		super('the session ended');
+		this.name = 'SessionEndedError';
+	}
+}
+
 function errorMessage(e: unknown): string {
 	return e instanceof Error ? e.message : 'Something went wrong';
 }
@@ -158,13 +166,24 @@ export class SyncManager {
 	/** Per store touched during the pull: key → the JSON the server sent
 	 *  (undefined for a delete), for the merge-kept-something-else check. */
 	private readonly touched = new Map<Registration, Map<string, string | undefined>>();
-	private syncing = false;
+	/** The session whose sync is running, if any: a sync left over from an
+	 *  ended session doesn't hold the next session's first sync back. */
+	private syncingSession: number | null = null;
 	private debounce: ReturnType<typeof setTimeout> | null = null;
 	private interval: ReturnType<typeof setInterval> | null = null;
 
 	// The live session. The transport reads the token through a getter, so a
 	// refresh swaps it without rebuilding the engine.
 	private token: string | null = null;
+	/**
+	 * Which session is live; every start and every ending moves it on. An
+	 * engine belongs to the session that made it: once that session ends, its
+	 * requests stop (its getter refuses the token) and what it pulls no longer
+	 * reaches the stores. Before 0.3.4 a sync still in flight at sign-out
+	 * carried on with the next session's token, pushing items sealed for the
+	 * old account into the new one, where no device can open them.
+	 */
+	private sessionId = 0;
 	private email: string | null = null;
 	private masterKey: CryptoKey | null = null;
 	private expiresAt: number | null = null;
@@ -444,6 +463,10 @@ export class SyncManager {
 			this.debounce = null;
 		}
 		const token = this.token;
+		this.sessionId++;
+		// A pull of the ended session may stop between its start and end.
+		this.pulling = false;
+		this.touched.clear();
 		this.engine = null;
 		this.token = null;
 		this.email = null;
@@ -493,30 +516,42 @@ export class SyncManager {
 		fresh = true
 	): Promise<void> {
 		const masterKey = master instanceof Uint8Array ? await importMasterKey(master) : master;
+		const id = ++this.sessionId;
+		const live = () => this.sessionId === id;
 		this.token = token;
 		this.email = email;
 		this.masterKey = masterKey;
 		this.expiresAt = expiresAt;
 		this.issuedAt = fresh ? Date.now() : null;
 		this.lastRefreshAttempt = 0;
-		this.engine = await SyncEngine.create(
+		const engine = await SyncEngine.create(
 			masterKey,
-			new HttpSyncTransport(this.apiBase, () => this.token ?? '', this.fetchFn),
+			new HttpSyncTransport(
+				this.apiBase,
+				() => {
+					if (!live()) throw new SessionEndedError();
+					return this.token ?? '';
+				},
+				this.fetchFn
+			),
 			{
 				node: this.deviceId,
-				onRemoteChange: (c) => this.applyRemote(c),
-				onPullStart: () => this.startPull(),
-				onPullEnd: () => this.endPull()
+				onRemoteChange: (c) => live() && this.applyRemote(c),
+				onPullStart: () => live() && this.startPull(),
+				onPullEnd: () => live() && this.endPull()
 			}
 		);
+		if (!live()) return; // signed out while the engine was made
+		this.engine = engine;
 		// Seed the engine with every current local entity so the first sync pushes
 		// what this device already has. The engine is fresh here, so reconcile()
 		// has nothing to replay and reduces to a pure seed.
 		for (const reg of this.regs) this.reconcile(reg);
 		await this.persist();
+		if (!live()) return;
 		this.auth.set({ status: 'signed-in', email });
 		await this.sync();
-		this.startTriggers();
+		if (live()) this.startTriggers();
 	}
 
 	private async persist(): Promise<void> {
@@ -580,27 +615,33 @@ export class SyncManager {
 	// --- the sync loop ---
 
 	async sync(): Promise<void> {
-		if (!this.engine || this.syncing) return;
-		this.syncing = true;
+		// A sync belongs to the session it began in: if that session ends on the
+		// way, it stops and leaves the status to the next one.
+		const engine = this.engine;
+		const id = this.sessionId;
+		if (!engine || this.syncingSession === id) return;
+		this.syncingSession = id;
+		const live = () => this.sessionId === id;
 		this.status.set('syncing');
 		try {
 			if (this.refreshDue() && !(await this.refresh())) return; // expired: teardown already reset the status
-			const engine = this.engine;
-			if (!engine) return;
+			if (!live()) return;
 			try {
 				await engine.sync();
 			} catch (e) {
+				if (!live()) return; // its requests stopped with the session
 				if (!(e instanceof SyncAuthError)) throw e;
 				// The token died between checks: one refresh, one retry.
-				if (!(await this.refresh()) || !this.engine) return;
-				await this.engine.sync();
+				if (!(await this.refresh()) || !live()) return;
+				await engine.sync();
 			}
+			if (!live()) return;
 			this.lastSyncedAt.set(Date.now());
 			this.status.set('idle');
 		} catch {
-			this.status.set('error');
+			if (live()) this.status.set('error');
 		} finally {
-			this.syncing = false;
+			if (this.syncingSession === id) this.syncingSession = null;
 		}
 	}
 
